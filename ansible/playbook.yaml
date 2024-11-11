@@ -1,0 +1,118 @@
+- name: Nginx server
+  hosts: webserver
+  become: true
+  vars_files:
+    - ../outputs.json
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+
+  tasks:
+    - name: Add PHP PPA repository
+      apt_repository:
+        repo: ppa:ondrej/php
+        state: present
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Update and install packages
+      apt:
+        name:
+          - nginx
+          - php8.1
+          - php8.1-fpm
+          - php8.1-mysql
+          - php8.1-xml
+          - php8.1-curl
+          - php8.1-dom
+          - mysql-server
+          - git
+          - python3-pymysql
+        update_cache: yes
+        state: present
+
+    - name: Install composer
+      shell: curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+    - name: cd to /var/www
+      shell: cd /var/www
+
+    - name: Clone the Laravel project
+      git:
+        repo: 'https://github.com/allphptricks/laravel-10-crud.git'
+        dest: '/var/www/laravel-10-crud'
+        version: HEAD
+
+    - name: cd to /var/www/laravel-10-crud
+      shell: cd /var/www/laravel-10-crud
+
+    - name: Copy .env file
+      copy:
+        src: .env.example
+        dest: /var/www/laravel-10-crud/.env
+        mode: '0644'
+    - name: Start MySQL service
+      service:
+        name: mysql
+        state: started
+
+    - name: Configure MySQL root password if not set
+      shell: "mysqladmin -u root password '111'"
+      args:
+        creates: /root/.my.cnf 
+
+    - name: Change MySQL root authentication method to native password
+      shell: "mysql -u root -p'111' -e \"ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '111';\""
+      args:
+        executable: /bin/bash
+
+    - name: Set MySQL root user password
+      mysql_user:
+        name: root
+        password: "111"
+        host: localhost
+        priv: "*.*:ALL,GRANT"
+        login_user: root
+        login_password: "111"
+        state: present
+      with_items:
+        - 127.0.0.1
+        - ::1
+        - localhost
+
+    - name: install composer  
+      composer:
+        command: install
+        working_dir: /var/www/laravel-10-crud
+      environment:
+        COMPOSER_NO_INTERACTION: "1"   
+        COMPOSER_ALLOW_SUPERUSER: "1" 
+
+    - name: Generate Laravel app key
+      shell: php artisan key:generate
+      args:
+        chdir: /var/www/laravel-10-crud
+
+    - name: Run Laravel migrations
+      shell: php artisan migrate --force
+      args:
+        chdir: /var/www/laravel-10-crud
+
+    - name: Update Nginx site configuration
+      copy:
+        src: nginx.conf
+        dest: /etc/nginx/sites-available/default
+        mode: '0644'
+
+    - name: Set ownership for Laravel files
+      file:
+        path: /var/www/laravel-10-crud
+        owner: www-data
+        group: www-data
+        recurse: yes
+
+    - name: Restart Nginx to apply configuration
+      service:
+        name: nginx
+        state: restarted
